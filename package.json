@@ -1,0 +1,15 @@
+{
+  "name": "discord-protection-bot",
+  "version": "1.0.0",
+  "description": "بوت حماية سيرفر ديسكورد يحمي من دخول بوتات غير مرغوب فيها",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "اسمك هنا",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.12.1",
+    "express": "^4.18.2"
+  }
+}
