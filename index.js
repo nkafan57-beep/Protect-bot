@@ -1,5 +1,5 @@
 
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, AuditLogEvent } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionsBitField, EmbedBuilder, ChannelType } = require('discord.js');
 const express = require('express');
 const app = express();
 
@@ -8,252 +8,326 @@ app.listen(3000, () => console.log('🌐 Web server is running.'));
 
 const token = process.env.TOKEN;
 const clientId = '1392084340145524757';
+const sourceGuildId = '1267563466508603473'; // السيرفر المصدر (يأخذ منه الرسائل)
 
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildModeration,
-        GatewayIntentBits.GuildAuditLog,
     ],
     presence: {
         status: 'online',
-        activities: [{ name: 'حماية السيرفر', type: 3 }]
+        activities: [{ name: 'نقل الرسائل', type: 3 }]
     }
 });
 
-// تخزين حالة الحماية القسوى لكل سيرفر
-const strictProtectionMap = new Map();
+// خريطة لحفظ القنوات المستهدفة لكل أمر
+const forwardingChannels = new Map();
 
-// تخزين حالة البان التلقائي لكل سيرفر
-const autoBanMap = new Map();
-
-// تخزين حالة تصفية الشتائم لكل سيرفر
-const profanityFilterMap = new Map();
-
-// تخزين أنظمة السجلات لكل سيرفر
-const loggingChannelsMap = new Map();
-
-// لتخزين رتب البوت مؤقتاً قبل سحبها
-const botsRolesCache = new Map();
-
-// تخزين التحذيرات
-const warningsMap = new Map();
-
-// تخزين الرسائل المحذوفة مؤقتاً للسجلات
-const deletedMessagesCache = new Map();
-
-// قائمة الشتائم والكلمات المحظورة
-const profanityWords = [
-    'زبي', 'كس', 'كس امك', 'اير', 'ايري', 'خرا', 'زب', 'كسمك', 'ايرك', 'منيوك',
-    'عاهرة', 'شرموطة', 'قحبة', 'بنت شرموطة', 'ابن قحبة', 'ابن كلب', 'كلب',
-    'حمار', 'تيس', 'خنزير', 'نيك', 'منيك', 'متناك', 'fuck', 'shit', 'bitch',
-    'ass', 'damn', 'pussy', 'dick', 'cock', 'whore', 'slut'
-];
-
-// دالة لتنظيف النص وإزالة الأحرف المشوشة
-function cleanText(text) {
-    return text
-        .toLowerCase()
-        .replace(/[^\u0600-\u06FFa-z0-9\s]/g, '') // إزالة الرموز والأحرف المشوشة
-        .replace(/(.)\1+/g, '$1') // إزالة الأحرف المكررة
-        .replace(/\s+/g, ' ') // توحيد المسافات
-        .trim();
-}
-
-// دالة للتحقق من وجود شتائم
-function containsProfanity(text) {
-    const cleanedText = cleanText(text);
-    
-    return profanityWords.some(word => {
-        const cleanedWord = cleanText(word);
-        
-        // البحث المباشر
-        if (cleanedText.includes(cleanedWord)) {
-            return true;
-        }
-        
-        // البحث مع تجاهل المسافات والرموز
-        const textWithoutSpaces = cleanedText.replace(/\s/g, '');
-        const wordWithoutSpaces = cleanedWord.replace(/\s/g, '');
-        
-        if (textWithoutSpaces.includes(wordWithoutSpaces)) {
-            return true;
-        }
-        
-        // البحث مع تجاهل الأحرف المفردة بين الأحرف
-        const regex = new RegExp(wordWithoutSpaces.split('').join('.*?'), 'i');
-        if (regex.test(textWithoutSpaces)) {
-            return true;
-        }
-        
-        return false;
-    });
-}
+// خريطة ربط الأوامر بالقنوات المصدر
+const sourceChannels = {
+    'شوب-الايڤنت': '1405128370634756146',
+    'شوب-الفواكه-والجير': '1390525017250594986', 
+    'الطقس': '1405126517054509098',
+    'شوب-البيض': '1405128412443578398'
+};
 
 client.once('ready', async () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
 
-    // تسجيل أوامر سلاش
+    // تسجيل أوامر سلاش عالمياً (في جميع السيرفرات)
     const commands = [
         new SlashCommandBuilder()
-            .setName('strictprotection')
-            .setDescription('تفعيل أو تعطيل الحماية القسوى للبوتات')
-            .addBooleanOption(option => option.setName('enable').setDescription('تشغيل أو إيقاف').setRequired(true)),
-        
+            .setName('شوب-الايڤنت')
+            .setDescription('تفعيل نقل رسائل شوب الايڤنت')
+            .addChannelOption(option => 
+                option.setName('channel')
+                      .setDescription('القناة التي ستستقبل الرسائل')
+                      .setRequired(true)
+                      .addChannelTypes(ChannelType.GuildText)
+            ),
+
         new SlashCommandBuilder()
-            .setName('autoban')
-            .setDescription('تفعيل أو تعطيل البان التلقائي للبوتات')
-            .addBooleanOption(option => option.setName('enable').setDescription('تشغيل أو إيقاف').setRequired(true)),
-            
+            .setName('شوب-الفواكه-والجير')
+            .setDescription('تفعيل نقل رسائل شوب الفواكه والجير')
+            .addChannelOption(option => 
+                option.setName('channel')
+                      .setDescription('القناة التي ستستقبل الرسائل')
+                      .setRequired(true)
+                      .addChannelTypes(ChannelType.GuildText)
+            ),
+
         new SlashCommandBuilder()
-            .setName('profanityfilter')
-            .setDescription('تفعيل أو تعطيل تصفية الشتائم')
-            .addBooleanOption(option => option.setName('enable').setDescription('تشغيل أو إيقاف').setRequired(true)),
-            
+            .setName('الطقس')
+            .setDescription('تفعيل نقل رسائل الطقس')
+            .addChannelOption(option => 
+                option.setName('channel')
+                      .setDescription('القناة التي ستستقبل الرسائل')
+                      .setRequired(true)
+                      .addChannelTypes(ChannelType.GuildText)
+            ),
+
         new SlashCommandBuilder()
-            .setName('setlogchannel')
-            .setDescription('تعيين قناة السجلات')
-            .addChannelOption(option => option.setName('channel').setDescription('قناة السجلات').setRequired(true)),
-            
+            .setName('شوب-البيض')
+            .setDescription('تفعيل نقل رسائل شوب البيض')
+            .addChannelOption(option => 
+                option.setName('channel')
+                      .setDescription('القناة التي ستستقبل الرسائل')
+                      .setRequired(true)
+                      .addChannelTypes(ChannelType.GuildText)
+            ),
+
         new SlashCommandBuilder()
-            .setName('warn')
-            .setDescription('تحذير عضو')
-            .addUserOption(option => option.setName('user').setDescription('العضو المراد تحذيره').setRequired(true))
-            .addStringOption(option => option.setName('reason').setDescription('سبب التحذير').setRequired(true)),
-            
+            .setName('ايقاف-النقل')
+            .setDescription('إيقاف نقل الرسائل')
+            .addStringOption(option =>
+                option.setName('نوع')
+                      .setDescription('نوع النقل المراد إيقافه')
+                      .setRequired(true)
+                      .addChoices(
+                          { name: 'شوب الايڤنت', value: 'شوب-الايڤنت' },
+                          { name: 'شوب الفواكه والجير', value: 'شوب-الفواكه-والجير' },
+                          { name: 'الطقس', value: 'الطقس' },
+                          { name: 'شوب البيض', value: 'شوب-البيض' },
+                          { name: 'جميع الأنواع', value: 'الكل' }
+                      )
+            ),
+
         new SlashCommandBuilder()
-            .setName('warnings')
-            .setDescription('عرض تحذيرات عضو')
-            .addUserOption(option => option.setName('user').setDescription('العضو المراد عرض تحذيراته').setRequired(true)),
-            
-        new SlashCommandBuilder()
-            .setName('timeout')
-            .setDescription('إعطاء مهلة زمنية لعضو')
-            .addUserOption(option => option.setName('user').setDescription('العضو المراد إعطاؤه مهلة').setRequired(true))
-            .addIntegerOption(option => option.setName('duration').setDescription('المدة بالدقائق').setRequired(true))
-            .addStringOption(option => option.setName('reason').setDescription('السبب').setRequired(false)),
-            
-        new SlashCommandBuilder()
-            .setName('addrole')
-            .setDescription('إعطاء رتبة لعضو')
-            .addUserOption(option => option.setName('user').setDescription('العضو').setRequired(true))
-            .addRoleOption(option => option.setName('role').setDescription('الرتبة').setRequired(true)),
-            
-        new SlashCommandBuilder()
-            .setName('removerole')
-            .setDescription('إزالة رتبة من عضو')
-            .addUserOption(option => option.setName('user').setDescription('العضو').setRequired(true))
-            .addRoleOption(option => option.setName('role').setDescription('الرتبة').setRequired(true))
+            .setName('حالة-النقل')
+            .setDescription('عرض حالة جميع عمليات نقل الرسائل المفعلة')
     ].map(cmd => cmd.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(token);
     try {
-        console.log('⏳ Registering slash commands globally...');
+        console.log('⏳ Registering global slash commands...');
         await rest.put(
             Routes.applicationCommands(clientId),
             { body: commands }
         );
-        console.log('✅ Slash commands registered globally!');
+        console.log('✅ Global slash commands registered!');
     } catch (error) {
         console.error('Error registering commands:', error);
     }
 });
 
-// مراقبة الرسائل للتحقق من الشتائم
+// مراقبة الرسائل في القنوات المصدر ونقلها
 client.on('messageCreate', async (message) => {
+    // تجاهل رسائل البوتات
     if (message.author.bot) return;
-    
-    const isProfanityEnabled = profanityFilterMap.get(message.guild.id);
-    if (!isProfanityEnabled) return;
-    
-    if (containsProfanity(message.content)) {
+
+    // التأكد من أن الرسالة من السيرفر المصدر المحدد
+    if (message.guild.id !== sourceGuildId) return;
+
+    // البحث عن القناة المصدر في خريطة الأوامر
+    const commandType = Object.keys(sourceChannels).find(key => 
+        sourceChannels[key] === message.channel.id
+    );
+
+    if (!commandType) return;
+
+    // الحصول على جميع القنوات المستهدفة لهذا النوع من الأوامر
+    for (const [key, targetChannelId] of forwardingChannels.entries()) {
+        // التحقق من أن المفتاح يطابق نوع الأمر
+        if (!key.startsWith(`${commandType}_`)) continue;
+
+        const targetChannel = client.channels.cache.get(targetChannelId);
+        if (!targetChannel) continue;
+
         try {
-            // حذف الرسالة
-            await message.delete();
-            
-            // إعطاء تايم أوت 10 دقائق
-            await message.member.timeout(10 * 60 * 1000, 'استخدام ألفاظ غير لائقة');
-            
-            // إرسال رسالة خاصة للعضو
-            try {
-                await message.author.send(`🚫 **تم حظرك مؤقتاً**\n\nتم حظرك لمدة 10 دقائق من سيرفر **${message.guild.name}** بسبب استخدام ألفاظ غير لائقة.\n\nالرسالة المحذوفة: \`${message.content}\`\n\nيرجى الالتزام بقوانين السيرفر.`);
-            } catch (e) {
-                console.log('Could not send DM to user');
-            }
-            
-            // تسجيل في قناة السجلات
-            const logChannel = loggingChannelsMap.get(message.guild.id);
-            if (logChannel) {
-                const channel = message.guild.channels.cache.get(logChannel);
-                if (channel) {
-                    const embed = new EmbedBuilder()
-                        .setColor('#ff0000')
-                        .setTitle('🚫 تم حذف رسالة تحتوي على شتائم')
-                        .addFields(
-                            { name: 'العضو', value: `${message.author} (${message.author.tag})`, inline: true },
-                            { name: 'القناة', value: `${message.channel}`, inline: true },
-                            { name: 'الرسالة', value: `\`${message.content}\``, inline: false },
-                            { name: 'الإجراء', value: 'تايم أوت 10 دقائق', inline: true }
-                        )
-                        .setTimestamp();
-                    
-                    await channel.send({ embeds: [embed] });
+            // إنشاء Embed للرسالة المنقولة
+            const embed = new EmbedBuilder()
+                .setColor('#0099ff')
+                .setAuthor({
+                    name: message.author.displayName || message.author.username,
+                    iconURL: message.author.displayAvatarURL()
+                })
+                .setDescription(message.content || 'رسالة بدون نص')
+                .addFields(
+                    { name: 'من القناة', value: `<#${message.channel.id}>`, inline: true },
+                    { name: 'النوع', value: commandType.replace('-', ' '), inline: true },
+                    { name: 'السيرفر المصدر', value: message.guild.name, inline: true }
+                )
+                .setTimestamp(message.createdAt)
+                .setFooter({ text: `ID: ${message.id}` });
+
+            // إضافة الصور/المرفقات إذا وجدت
+            if (message.attachments.size > 0) {
+                const attachment = message.attachments.first();
+                if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+                    embed.setImage(attachment.url);
+                } else {
+                    embed.addFields({
+                        name: 'مرفق',
+                        value: `[${attachment.name}](${attachment.url})`,
+                        inline: false
+                    });
                 }
             }
-            
+
+            await targetChannel.send({ embeds: [embed] });
+
+            console.log(`📤 نقل رسالة من ${message.channel.name} (${message.guild.name}) إلى ${targetChannel.name} (${targetChannel.guild.name})`);
+
         } catch (error) {
-            console.error('Error handling profanity:', error);
+            console.error('خطأ في نقل الرسالة:', error);
         }
     }
 });
 
-// معالجة الأوامر الكتابية
-client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    if (!message.content.startsWith('!')) return;
-    
-    const args = message.content.slice(1).split(' ');
-    const command = args.shift().toLowerCase();
-    
-    // أمر التحذير الكتابي
-    if (command === 'w' || command === 'warn') {
-        if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
-            return message.reply('❌ ليس لديك صلاحية لاستخدام هذا الأمر.');
+// معالجة أوامر السلاش
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isChatInputCommand()) return;
+
+    try {
+        const commandName = interaction.commandName;
+
+        // معالجة أوامر تفعيل النقل
+        if (sourceChannels[commandName]) {
+            // التحقق من الصلاحيات
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+                return interaction.reply({
+                    content: '❌ ليس لديك صلاحية لاستخدام هذا الأمر.',
+                    ephemeral: true
+                });
+            }
+
+            const targetChannel = interaction.options.getChannel('channel');
+
+            // التأكد من أن القناة المستهدفة نصية
+            if (targetChannel.type !== ChannelType.GuildText) {
+                return interaction.reply({
+                    content: '❌ يجب أن تكون القناة المستهدفة قناة نصية.',
+                    ephemeral: true
+                });
+            }
+
+            // التأكد من أن البوت يستطيع الإرسال في القناة المستهدفة
+            const botPermissions = targetChannel.permissionsFor(interaction.guild.members.me);
+            if (!botPermissions.has(PermissionsBitField.Flags.SendMessages)) {
+                return interaction.reply({
+                    content: '❌ البوت لا يملك صلاحية الإرسال في القناة المستهدفة.',
+                    ephemeral: true
+                });
+            }
+
+            // إنشاء مفتاح فريد للقناة المستهدفة
+            const uniqueKey = `${commandName}_${interaction.guild.id}_${targetChannel.id}`;
+
+            // حفظ القناة المستهدفة
+            forwardingChannels.set(uniqueKey, targetChannel.id);
+
+            // الحصول على السيرفر المصدر للعرض
+            const sourceGuild = client.guilds.cache.get(sourceGuildId);
+            const sourceChannel = sourceGuild ? sourceGuild.channels.cache.get(sourceChannels[commandName]) : null;
+
+            await interaction.reply({
+                content: `✅ تم تفعيل نقل رسائل **${commandName.replace('-', ' ')}** إلى ${targetChannel}\n\n📍 القناة المصدر: ${sourceChannel ? `<#${sourceChannel.id}>` : 'غير متاح'} (${sourceGuild ? sourceGuild.name : 'غير متاح'})\n📍 القناة المستهدفة: ${targetChannel} (${interaction.guild.name})`,
+                ephemeral: true
+            });
+
+            console.log(`✅ تم تفعيل نقل ${commandName} من ${sourceGuild?.name} إلى ${targetChannel.name} (${interaction.guild.name})`);
         }
-        
-        const target = message.mentions.users.first();
-        if (!target) {
-            return message.reply('❌ يجب عليك منشن العضو المراد تحذيره.');
+
+        // معالجة أمر إيقاف النقل
+        else if (commandName === 'ايقاف-النقل') {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+                return interaction.reply({
+                    content: '❌ ليس لديك صلاحية لاستخدام هذا الأمر.',
+                    ephemeral: true
+                });
+            }
+
+            const type = interaction.options.getString('نوع');
+
+            if (type === 'الكل') {
+                // حذف جميع عمليات النقل للسيرفر الحالي
+                const keysToDelete = [];
+                for (const [key] of forwardingChannels.entries()) {
+                    if (key.includes(`_${interaction.guild.id}_`)) {
+                        keysToDelete.push(key);
+                    }
+                }
+                
+                keysToDelete.forEach(key => forwardingChannels.delete(key));
+                
+                await interaction.reply({
+                    content: `✅ تم إيقاف جميع عمليات نقل الرسائل في هذا السيرفر. (${keysToDelete.length} عملية)`,
+                    ephemeral: true
+                });
+            } else {
+                // البحث عن المفتاح المحدد لهذا السيرفر
+                const keyToDelete = Array.from(forwardingChannels.keys()).find(key => 
+                    key.startsWith(`${type}_${interaction.guild.id}_`)
+                );
+
+                if (keyToDelete) {
+                    forwardingChannels.delete(keyToDelete);
+                    await interaction.reply({
+                        content: `✅ تم إيقاف نقل رسائل **${type.replace('-', ' ')}** في هذا السيرفر.`,
+                        ephemeral: true
+                    });
+                } else {
+                    await interaction.reply({
+                        content: `❌ نقل رسائل **${type.replace('-', ' ')}** غير مفعل في هذا السيرفر.`,
+                        ephemeral: true
+                    });
+                }
+            }
         }
-        
-        const reason = args.slice(1).join(' ') || 'لا يوجد سبب محدد';
-        
-        // إضافة التحذير
-        const guildWarnings = warningsMap.get(message.guild.id) || new Map();
-        const userWarnings = guildWarnings.get(target.id) || [];
-        
-        userWarnings.push({
-            reason: reason,
-            moderator: message.author.tag,
-            date: new Date(),
-            id: Date.now()
-        });
-        
-        guildWarnings.set(target.id, userWarnings);
-        warningsMap.set(message.guild.id, guildWarnings);
-        
-        await message.reply(`⚠️ تم تحذير ${target.tag} بنجاح.\nالسبب: ${reason}\nعدد التحذيرات: ${userWarnings.length}`);
-        
-        // تسجيل في السجلات
-        const logChannel = loggingChannelsMap.get(message.guild.id);
-        if (logChannel) {
-            const channel = message.guild.channels.cache.get(logChannel);
-            if (channel) {
-                const embed = new EmbedBuilder()
-                    .setColor('#ffff00')
+
+        // معالجة أمر عرض الحالة
+        else if (commandName === 'حالة-النقل') {
+            const activeForwardings = [];
+            
+            for (const [key, channelId] of forwardingChannels.entries()) {
+                if (key.includes(`_${interaction.guild.id}_`)) {
+                    const [type, , ] = key.split('_');
+                    const channel = client.channels.cache.get(channelId);
+                    if (channel) {
+                        activeForwardings.push(`• **${type.replace('-', ' ')}** ← ${channel}`);
+                    }
+                }
+            }
+
+            if (activeForwardings.length === 0) {
+                await interaction.reply({
+                    content: '❌ لا توجد عمليات نقل مفعلة في هذا السيرفر.',
+                    ephemeral: true
+                });
+            } else {
+                const sourceGuild = client.guilds.cache.get(sourceGuildId);
+                await interaction.reply({
+                    content: `📊 **عمليات النقل المفعلة:**\n\n${activeForwardings.join('\n')}\n\n📍 **السيرفر المصدر:** ${sourceGuild ? sourceGuild.name : 'غير متاح'}`,
+                    ephemeral: true
+                });
+            }
+        }
+
+    } catch (error) {
+        console.error('خطأ في معالجة الأمر:', error);
+
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+                content: '❌ حدث خطأ أثناء تنفيذ الأمر.',
+                ephemeral: true
+            });
+        }
+    }
+});
+
+// معالجة الأخطاء
+client.on('error', error => {
+    console.error('Discord client error:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+client.login(token);
+       .setColor('#ffff00')
                     .setTitle('⚠️ تحذير جديد')
                     .addFields(
                         { name: 'المحذِر', value: `${message.author} (${message.author.tag})`, inline: true },
